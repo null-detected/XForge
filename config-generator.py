@@ -11,7 +11,7 @@ import re
 import sys
 from itertools import product
 from pathlib import Path
-from typing import Generator, Iterable, List, Set, Tuple
+from typing import Generator, List, Set, Tuple
 
 
 class ProxyMatrixGenerator:
@@ -23,12 +23,12 @@ class ProxyMatrixGenerator:
     LARGE_SUBNET_THRESHOLD = 65536
 
     def __init__(self, ports_spec: str, hosts_spec: str = None, hosts_file: str = None):
-        self.ports: List[str] = [str(p) for p in self._parse_ports(ports_spec)]
+        self.ports: List[str] = [str(p) for p in self._parse_ports(ports_spec)] if ports_spec else []
         self.hosts: List[str] = [self._format_host(h) for h in self._parse_hosts(hosts_spec, hosts_file)]
-        
-        if not self.ports:
+
+        if ports_spec and not self.ports:
             raise ValueError("No valid ports could be resolved from the provided specification.")
-        if not self.hosts:
+        if (hosts_spec or hosts_file) and not self.hosts:
             raise ValueError("No valid target hosts could be resolved.")
 
     def _parse_ports(self, spec: str) -> List[int]:
@@ -59,7 +59,7 @@ class ProxyMatrixGenerator:
                     port = int(chunk)
                 except ValueError:
                     raise ValueError(f"Invalid integer port value: '{chunk}'")
-                
+
                 if not (1 <= port <= 65535):
                     raise ValueError(f"Port {port} sits outside valid range [1-65535]")
                 if port not in seen:
@@ -107,7 +107,7 @@ class ProxyMatrixGenerator:
             if not p.is_file():
                 print(f"[-] Error: Target hosts file not found at '{file_path}'", file=sys.stderr)
                 sys.exit(1)
-            
+
             with p.open("r", encoding="utf-8-sig") as f:
                 for line in f:
                     line = line.strip()
@@ -127,17 +127,29 @@ class ProxyMatrixGenerator:
 
         active_proxies = [ln for ln in lines if not ln.startswith("#") and self.PROXY_URI_PATTERN.search(ln)]
         skipped_count = len(lines) - len(active_proxies)
-        
+
         if not active_proxies:
             return len(lines), 0, skipped_count
+
+        if not self.hosts and not self.ports:
+            for line in active_proxies:
+                out_stream.write(line + "\n")
+            return len(lines), len(active_proxies), skipped_count
 
         written_count = 0
         emitted_lines: Set[str] = set()
 
-        for h, p in product(self.hosts, self.ports):
+        host_axis = self.hosts if self.hosts else [None]
+        port_axis = self.ports if self.ports else [None]
+
+        for h, p in product(host_axis, port_axis):
             chunk: List[str] = []
             for base_line in active_proxies:
-                altered = self.PROXY_URI_PATTERN.sub(lambda m: f"{m.group(1)}{h}:{p}", base_line)
+                def replacer(m, h=h, p=p):
+                    new_host = h if h is not None else m.group(2)
+                    new_port = p if p is not None else m.group(3)
+                    return f"{m.group(1)}{new_host}:{new_port}"
+                altered = self.PROXY_URI_PATTERN.sub(replacer, base_line)
                 if altered not in emitted_lines:
                     chunk.append(altered)
                     emitted_lines.add(altered)
@@ -175,12 +187,9 @@ def main():
     parser.add_argument("-o", "--output", default="ConfigHub_result.txt", help="Destination path for compilation matrix.")
     parser.add_argument("--hosts", help="Inline comma-delimited strings of IPs, subnets, or hostnames.")
     parser.add_argument("--hosts-file", help="Filepath containing line-separated targets.")
-    parser.add_argument("--ports", required=True, help="Target ports or ranges (e.g., 80,443,8000-8010).")
-    
-    args = parser.parse_args()
+    parser.add_argument("--ports", required=False, default="", help="Target ports or ranges (e.g., 80,443,8000-8010).")
 
-    if not args.hosts and not args.hosts_file:
-        parser.error("Execution requires either --hosts or --hosts-file parameter values.")
+    args = parser.parse_args()
 
     try:
         engine = ProxyMatrixGenerator(ports_spec=args.ports, hosts_spec=args.hosts, hosts_file=args.hosts_file)
@@ -199,8 +208,10 @@ def main():
         print("[-] Conflict Avoidance: Output location matches an input file path. Aborting.", file=sys.stderr)
         sys.exit(1)
 
-    print(f"[+] Multiplier processing initialized ({len(engine.hosts):,} hosts x {len(engine.ports):,} ports)")
-    
+    host_label = f"{len(engine.hosts):,} hosts" if engine.hosts else "original hosts"
+    port_label = f"{len(engine.ports):,} ports" if engine.ports else "original ports"
+    print(f"[+] Multiplier processing initialized ({host_label} x {port_label})")
+
     run_summary = []
     try:
         dest_path.parent.mkdir(parents=True, exist_ok=True)
