@@ -241,6 +241,3 @@ config.txt                |          25 |        1000 |            2
 
 Add your preferred license here.
 
-## Author
-
-Mojtaba (@csiseverything)
