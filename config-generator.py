@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """
 Proxy Configuration Matrix Generator
-Author: Mojtaba @csiseverything
-For my friend Ali :)
 """
 
 import argparse
